@@ -357,6 +357,7 @@ def add_flood_config():
     save_config(config)
 
 # Function to check if a user is flooding
+# Function to check if a user is flooding
 async def check_flood(event):
     if event.is_private:  # Skip private messages
         return False
@@ -366,19 +367,19 @@ async def check_flood(event):
         return False
         
     chat_id = event.chat_id
-    chat_id_str = str(chat_id)
     user_id = event.sender_id
     current_time = time.time()
     
     # Ensure chat is in config
-    ensure_group_in_config(chat_id)
+    chat_id_str = ensure_group_in_config(chat_id)  # Bu satırı değiştirdim
     
     # Get flood settings for this chat
-    if chat_id_str not in config["groups"] or "flood_settings" not in config["groups"][chat_id_str]:
+    if "flood_settings" not in config["groups"][chat_id_str]:
         add_flood_config()
     
     flood_settings = config["groups"][chat_id_str]["flood_settings"]
     
+    # Burada devre dışı kontrolü yapıyoruz
     if not flood_settings["enabled"]:
         return False
     
@@ -1643,6 +1644,184 @@ async def info_command(event):
         await event.respond(f"Bir hata oluştu: {str(e)}")
 
 # BUTON İŞLEYİCİLERİ
+# Basit günlük istatistik özelliği
+# bot.py dosyasının sonuna ekleyin (main() fonksiyonundan önce)
+# Basit günlük istatistik özelliği
+# bot.py dosyasının sonuna ekleyin (main() fonksiyonundan önce)
+import pytz
+from telethon.tl.functions.channels import GetFullChannelRequest
+
+# Thread ID for stats in the log channel
+if "stats" not in THREAD_IDS:
+    # You need to create this thread in your log channel
+    THREAD_IDS["stats"] = 0  # Gerçek thread ID ile değiştirin
+
+# Basit günlük istatistikler
+daily_stats = {
+    "new_members": {},  # {chat_id: count}
+    "left_members": {},  # {chat_id: count}
+    "messages": {}      # {chat_id: count}
+}
+
+# İstatistikleri sıfırla
+def reset_daily_stats():
+    for key in daily_stats:
+        daily_stats[key] = {}
+
+# İstatistikleri dosyaya kaydet
+def save_stats():
+    stats_file = 'bot_stats.json'
+    with open(stats_file, 'w', encoding='utf-8') as f:
+        json.dump(daily_stats, f, indent=4, ensure_ascii=False)
+
+# İstatistikleri dosyadan yükle
+def load_stats():
+    global daily_stats
+    stats_file = 'bot_stats.json'
+    if os.path.exists(stats_file):
+        try:
+            with open(stats_file, 'r', encoding='utf-8') as f:
+                daily_stats = json.load(f)
+        except:
+            reset_daily_stats()
+    else:
+        reset_daily_stats()
+        save_stats()
+
+# Bir istatistiği artır
+def increment_stat(stat_type, chat_id):
+    chat_id_str = str(chat_id)
+    if chat_id_str not in daily_stats[stat_type]:
+        daily_stats[stat_type][chat_id_str] = 0
+    daily_stats[stat_type][chat_id_str] += 1
+    save_stats()
+
+# Bir grup için istatistik raporu oluştur
+async def generate_stats_report(chat_id):
+    chat_id_str = str(chat_id)
+    
+    try:
+        # Grup bilgisini al
+        chat = await client.get_entity(int(chat_id))
+        
+        # Katılımcı sayısını al
+        try:
+            full_chat = await client(GetFullChannelRequest(chat))
+            member_count = full_chat.full_chat.participants_count
+        except:
+            member_count = "Bilinmiyor"
+        
+        # İstatistikleri topla
+        new_members = daily_stats["new_members"].get(chat_id_str, 0)
+        left_members = daily_stats["left_members"].get(chat_id_str, 0)
+        messages = daily_stats["messages"].get(chat_id_str, 0)
+        
+        # Net üye değişimi
+        net_change = new_members - left_members
+        change_emoji = "📈" if net_change > 0 else "📉" if net_change < 0 else "➖"
+        
+        # Raporu oluştur
+        report = f"📊 **GÜNLÜK İSTATİSTİK RAPORU**\n\n"
+        report += f"**Grup:** {chat.title} (`{chat.id}`)\n"
+        report += f"**Tarih:** {datetime.now().strftime('%Y-%m-%d')}\n\n"
+        
+        report += f"**Üye Sayısı:** {member_count}\n"
+        report += f"**Üye Değişimi:** {change_emoji} {net_change:+d}\n"
+        report += f"➖ Yeni Üyeler: {new_members}\n"
+        report += f"➖ Ayrılan Üyeler: {left_members}\n\n"
+        
+        report += f"**Aktivite:**\n"
+        report += f"💬 Mesaj Sayısı: {messages}\n"
+        
+        return report, chat.title
+    
+    except Exception as e:
+        logger.error(f"İstatistik raporu oluşturulurken hata: {e}")
+        return f"İstatistik raporu oluşturulurken hata oluştu: {str(e)}", "Bilinmeyen Grup"
+
+# Günlük istatistik raporunu gönder
+async def send_daily_report():
+    while True:
+        try:
+            # Türkiye zaman diliminde mevcut saati al
+            turkey_tz = pytz.timezone('Europe/Istanbul')
+            now = datetime.now(turkey_tz)
+            
+            # Hedef zamanı ayarla (Türkiye saatiyle akşam 9)
+            target_time = now.replace(hour=21, minute=0, second=0, microsecond=0)
+            
+            # Eğer mevcut zaman hedef zamandan daha ilerideyse, hedefi yarına ayarla
+            if now.time() >= target_time.time():
+                target_time = target_time + timedelta(days=1)
+            
+            # Hedef zamana kadar beklenecek saniye sayısını hesapla
+            wait_seconds = (target_time - now).total_seconds()
+            
+            # Hedef zamana kadar bekle
+            await asyncio.sleep(wait_seconds)
+            
+            # Tüm aktif gruplar için log kanalına rapor gönder
+            all_reports = ""
+            for chat_id_str in config["groups"]:
+                try:
+                    chat_id = int(chat_id_str)
+                    report, chat_title = await generate_stats_report(chat_id)
+                    
+                    # Her grup için ayrı bir rapor ekle
+                    all_reports += f"{report}\n{'─' * 30}\n\n"
+                    
+                except Exception as e:
+                    logger.error(f"İstatistik raporu oluşturulurken hata ({chat_id_str}): {e}")
+            
+            # Tüm raporları birleştirerek tek bir mesajda gönder
+            if all_reports:
+                header = f"📊 **TÜM GRUPLARIN GÜNLÜK İSTATİSTİK RAPORU**\n" \
+                        f"**Tarih:** {datetime.now().strftime('%Y-%m-%d')}\n\n"
+                
+                # Log kanalındaki thread'e gönder
+                await log_to_thread("stats", header + all_reports)
+            
+            # Raporları gönderdikten sonra istatistikleri sıfırla
+            reset_daily_stats()
+            save_stats()
+            
+            # Çoklu rapor gönderimini önlemek için biraz bekle
+            await asyncio.sleep(60)
+            
+        except Exception as e:
+            logger.error(f"Günlük rapor göndericisinde hata: {e}")
+            await asyncio.sleep(60)  # Hata sonrası tekrar denemeden önce bekle
+
+# Anlık istatistikleri gösterme komutu - sadece admin kullanabilir
+@client.on(events.NewMessage(pattern=r'/stat(?:@\w+)?'))
+async def stat_command(event):
+    if not await check_admin_permission(event, "edit_group"):
+        await event.respond("Bu komutu kullanma yetkiniz yok.")
+        return
+    
+    chat_id = event.chat_id
+    report, _ = await generate_stats_report(chat_id)
+    await event.respond(report)
+
+# İstatistikleri toplamak için event handler'ları
+
+# Yeni üye katılımlarını izle
+@client.on(events.ChatAction(func=lambda e: e.user_joined or e.user_added))
+async def track_new_members(event):
+    increment_stat("new_members", event.chat_id)
+
+# Üyelerin ayrılmasını izle
+@client.on(events.ChatAction(func=lambda e: e.user_kicked or e.user_left))
+async def track_left_members(event):
+    increment_stat("left_members", event.chat_id)
+
+# Mesajları izle
+@client.on(events.NewMessage)
+async def track_messages(event):
+    if not event.is_private and event.message:
+        increment_stat("messages", event.chat_id)
+
+# Ana fonksiyonu güncelle
 
 # Yönetim işlem butonları
 @client.on(events.CallbackQuery(pattern=r'action_(ban|mute|kick|warn)_(\d+)'))
@@ -2182,6 +2361,16 @@ async def log_user_left(event):
 # TEKRARLANAN MESAJLAR
 
 # Tekrarlanan mesaj ayarları
+# Aralığı metin olarak biçimlendirmek için yardımcı fonksiyon
+def format_interval(seconds):
+    if seconds < 60:
+        return f"{seconds} saniye"
+    elif seconds < 3600:
+        return f"{seconds // 60} dakika"
+    else:
+        return f"{seconds // 3600} saat"
+
+# Tekrarlanan mesaj ayarları menüsünü güncelleyelim
 @client.on(events.NewMessage(pattern=r'/tekrarlanmesaj'))
 async def repeated_messages_menu(event):
     if not await check_admin_permission(event, "edit_group"):
@@ -2191,74 +2380,126 @@ async def repeated_messages_menu(event):
     chat = await event.get_chat()
     chat_id_str = ensure_group_in_config(chat.id)
     
+    # Eğer eski yapıdaysa yeni yapıya dönüştür
     if "repeated_messages" not in config["groups"][chat_id_str]:
         config["groups"][chat_id_str]["repeated_messages"] = {
             "enabled": False,
             "interval": 3600,  # Varsayılan: 1 saat
             "messages": [],
-            "with_image": False,
             "buttons": []
         }
         save_config(config)
     
+    # Eski formatı yeni formata dönüştür (eğer gerekiyorsa)
     repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
-    status = "Açık ✅" if repeated_settings["enabled"] else "Kapalı ❌"
     
-    # Zaman biçimlendirme
-    interval = repeated_settings["interval"]
-    if interval < 60:
-        interval_text = f"{interval} saniye"
-    elif interval < 3600:
-        interval_text = f"{interval // 60} dakika"
-    else:
-        interval_text = f"{interval // 3600} saat"
+    # Eğer eski formatsa yeni formata dönüştür
+    if "messages" in repeated_settings and isinstance(repeated_settings["messages"], list) and repeated_settings["messages"] and isinstance(repeated_settings["messages"][0], str):
+        old_messages = repeated_settings["messages"]
+        new_messages = []
+        
+        for msg in old_messages:
+            new_messages.append({
+                "text": msg,
+                "interval": repeated_settings["interval"],
+                "last_sent": 0
+            })
+        
+        repeated_settings["messages"] = new_messages
+        save_config(config)
     
-    # Menü butonları
+    status = "Aktif ✅" if repeated_settings["enabled"] else "Devre Dışı ❌"
+    
+    # Ana menü butonları
     toggle_button = Button.inline(
         f"{'Kapat 🔴' if repeated_settings['enabled'] else 'Aç 🟢'}", 
         data=f"repeated_toggle_{chat.id}"
     )
-    set_interval_button = Button.inline("⏱️ Aralık Ayarla", data=f"repeated_interval_{chat.id}")
     add_message_button = Button.inline("✏️ Mesaj Ekle", data=f"repeated_add_message_{chat.id}")
-    list_messages_button = Button.inline("📋 Mesajları Listele", data=f"repeated_list_messages_{chat.id}")
-    clear_messages_button = Button.inline("🗑️ Mesajları Temizle", data=f"repeated_clear_messages_{chat.id}")
-    toggle_image_button = Button.inline(
-        f"📷 {'Resim Kapat' if repeated_settings['with_image'] else 'Resim Aç'}", 
-        data=f"repeated_toggle_image_{chat.id}"
-    )
+    list_messages_button = Button.inline("📋 Mesajları Listele/Düzenle", data=f"repeated_list_messages_{chat.id}")
+    clear_messages_button = Button.inline("🗑️ Tüm Mesajları Temizle", data=f"repeated_clear_messages_{chat.id}")
+    
+    # Varsayılan ayarlar butonları
+    default_settings_button = Button.inline("⚙️ Varsayılan Ayarlar", data=f"repeated_default_settings_{chat.id}")
     add_button_button = Button.inline("➕ Buton Ekle", data=f"repeated_add_button_{chat.id}")
     clear_buttons_button = Button.inline("🗑️ Butonları Temizle", data=f"repeated_clear_buttons_{chat.id}")
     
     buttons = [
         [toggle_button],
-        [set_interval_button],
         [add_message_button, list_messages_button],
         [clear_messages_button],
-        [toggle_image_button],
+        [default_settings_button],
         [add_button_button, clear_buttons_button]
     ]
     
-    message_info = f"Mesaj Sayısı: {len(repeated_settings['messages'])}"
-    button_info = f"Buton Sayısı: {len(repeated_settings.get('buttons', []))}"
-    image_status = "Açık ✅" if repeated_settings.get("with_image", False) else "Kapalı ❌"
+    # Mesaj sayısını hesapla
+    msg_count = len(repeated_settings.get("messages", []))
+    button_count = len(repeated_settings.get("buttons", []))
     
-    await event.respond(
-        f"🔄 **Tekrarlanan Mesaj Ayarları**\n\n"
-        f"**Durum:** {status}\n"
-        f"**Aralık:** {interval_text}\n"
-        f"**{message_info}**\n"
-        f"**{button_info}**\n"
-        f"**Resim Durumu:** {image_status}",
-        buttons=buttons
-    )
+    # Varsayılan ayarları biçimlendir
+    default_interval = repeated_settings.get("interval", 3600)
+    if default_interval < 60:
+        default_interval_text = f"{default_interval} saniye"
+    elif default_interval < 3600:
+        default_interval_text = f"{default_interval // 60} dakika"
+    else:
+        default_interval_text = f"{default_interval // 3600} saat"
+    
+    menu_text = f"🔄 **Tekrarlanan Mesaj Ayarları**\n\n" \
+               f"**Durum:** {status}\n" \
+               f"**Mesaj Sayısı:** {msg_count}\n" \
+               f"**Buton Sayısı:** {button_count}\n\n" \
+               f"**Varsayılan Ayarlar:**\n" \
+               f"⏱️ Süre: {default_interval_text}"
+    
+    await event.respond(menu_text, buttons=buttons)
 
-# Tekrarlanan mesaj menü işleyicileri
-@client.on(events.CallbackQuery(pattern=r'repeated_(toggle|interval|add_message|list_messages|clear_messages|toggle_image|add_button|clear_buttons)_(-?\d+)'))
-async def repeated_settings_handler(event):
+# Varsayılan ayarlar için yeni buton işleyici
+@client.on(events.CallbackQuery(pattern=r'repeated_default_settings_(-?\d+)'))
+async def repeated_default_settings_handler(event):
     try:
-        # Byte tipindeki match gruplarını stringe dönüştür
-        action = event.pattern_match.group(1).decode()
-        chat_id = int(event.pattern_match.group(2).decode())
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
+        
+        # Varsayılan değerleri al
+        default_interval = repeated_settings.get("interval", 3600)
+        if default_interval < 60:
+            default_interval_text = f"{default_interval} saniye"
+        elif default_interval < 3600:
+            default_interval_text = f"{default_interval // 60} dakika"
+        else:
+            default_interval_text = f"{default_interval // 3600} saat"
+        
+        # Varsayılan ayarlar menüsü
+        set_default_interval_button = Button.inline("⏱️ Varsayılan Süre Ayarla", data=f"repeated_set_default_interval_{chat_id}")
+        back_button = Button.inline("⬅️ Geri", data=f"repeated_back_to_main_{chat_id}")
+        
+        buttons = [
+            [set_default_interval_button],
+            [back_button]
+        ]
+        
+        settings_text = f"⚙️ **Varsayılan Ayarlar**\n\n" \
+                      f"⏱️ **Varsayılan Süre:** {default_interval_text}\n\n" \
+                      f"Bu ayarlar yeni eklenen mesajlar için kullanılacaktır."
+        
+        await event.edit(settings_text, buttons=buttons)
+        
+    except Exception as e:
+        logger.error(f"Varsayılan ayarlar buton işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Varsayılan süre için yeni buton işleyici
+@client.on(events.CallbackQuery(pattern=r'repeated_set_default_interval_(-?\d+)'))
+async def repeated_default_interval_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
         
         if not await check_admin_permission(event, "edit_group"):
             await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
@@ -2266,141 +2507,627 @@ async def repeated_settings_handler(event):
         
         chat_id_str = ensure_group_in_config(chat_id)
         
-        await event.answer()
-        
-        if action == "toggle":
-            current_state = config["groups"][chat_id_str]["repeated_messages"]["enabled"]
-            new_state = not current_state
-            config["groups"][chat_id_str]["repeated_messages"]["enabled"] = new_state
-            save_config(config)
+        async with client.conversation(event.sender_id, timeout=300) as conv:
+            await event.answer()
+            await event.delete()
             
-            status = "açıldı ✅" if new_state else "kapatıldı ❌"
-            await event.edit(f"Tekrarlanan mesajlar {status}")
+            await conv.send_message(
+                "Varsayılan tekrarlama süresini belirtin:\n"
+                "- Saat için: 1h, 2h, vb.\n"
+                "- Dakika için: 1m, 30m, vb.\n"
+                "- Saniye için: 30s, 45s, vb."
+            )
+            interval_response = await conv.get_response()
+            interval_text = interval_response.text.lower()
             
-            # Eğer açıldıysa ve mesajlar varsa zamanlayıcıyı başlat
-            if new_state and config["groups"][chat_id_str]["repeated_messages"]["messages"]:
-                # Bu örnek için zamanlayıcıyı yeniden başlatmak gerekir
-                # Gerçek uygulamada bir arka plan göreviyle kontrol edilir
-                pass
-        
-        elif action == "interval":
-            async with client.conversation(event.sender_id, timeout=300) as conv:
-                await event.delete()
-                await conv.send_message(
-                    "Tekrarlama aralığını belirtin:\n"
-                    "- Saat için: 1h, 2h, vb.\n"
-                    "- Dakika için: 1m, 30m, vb.\n"
-                    "- Saniye için: 30s, 45s, vb."
-                )
-                interval_response = await conv.get_response()
-                interval_text = interval_response.text.lower()
+            match = re.match(r'(\d+)([hms])', interval_text)
+            if match:
+                value = int(match.group(1))
+                unit = match.group(2)
                 
+                if unit == 'h':
+                    seconds = value * 3600
+                elif unit == 'm':
+                    seconds = value * 60
+                else:  # 's'
+                    seconds = value
+                
+                config["groups"][chat_id_str]["repeated_messages"]["interval"] = seconds
+                save_config(config)
+                
+                if seconds < 60:
+                    interval_text = f"{seconds} saniye"
+                elif seconds < 3600:
+                    interval_text = f"{seconds // 60} dakika"
+                else:
+                    interval_text = f"{seconds // 3600} saat"
+                
+                await conv.send_message(f"Varsayılan tekrarlama süresi {interval_text} olarak ayarlandı.")
+            else:
+                await conv.send_message("Geçersiz format. Değişiklik yapılmadı.")
+                
+            # Varsayılan ayarlar menüsüne geri dön
+            msg = await conv.send_message("Menüye dönülüyor...")
+            await repeated_default_settings_handler(await client.get_messages(conv.chat_id, ids=msg.id))
+        
+    except Exception as e:
+        logger.error(f"Varsayılan süre ayarlama işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Ana menüye dönüş buton işleyicisi
+@client.on(events.CallbackQuery(pattern=r'repeated_back_to_main_(-?\d+)'))
+async def repeated_back_to_main_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        # Ana menüye dön
+        await repeated_messages_menu(event)
+        
+    except Exception as e:
+        logger.error(f"Ana menüye dönüş işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Mesaj ekleme işlevini güncelle
+@client.on(events.CallbackQuery(pattern=r'repeated_add_message_(-?\d+)'))
+async def repeated_add_message_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
+        
+        async with client.conversation(event.sender_id, timeout=300) as conv:
+            await event.answer()
+            await event.delete()
+            
+            await conv.send_message("Eklemek istediğiniz mesajı girin:")
+            message_response = await conv.get_response()
+            message_text = message_response.text
+            
+            if not message_text:
+                await conv.send_message("Geçersiz mesaj. Değişiklik yapılmadı.")
+                return
+            
+            # Varsayılan değerleri kullan
+            default_interval = repeated_settings.get("interval", 3600)
+            
+            # Özel süre sorma
+            await conv.send_message(
+                f"Bu mesaj için tekrarlama süresini belirtin (varsayılan: {format_interval(default_interval)}):\n"
+                "- Varsayılan süreyi kullanmak için 'default' yazın\n"
+                "- Saat için: 1h, 2h, vb.\n"
+                "- Dakika için: 1m, 30m, vb.\n"
+                "- Saniye için: 30s, 45s, vb."
+            )
+            interval_response = await conv.get_response()
+            interval_text = interval_response.text.lower()
+            
+            if interval_text == "default":
+                interval = default_interval
+            else:
                 match = re.match(r'(\d+)([hms])', interval_text)
                 if match:
                     value = int(match.group(1))
                     unit = match.group(2)
                     
                     if unit == 'h':
-                        seconds = value * 3600
+                        interval = value * 3600
                     elif unit == 'm':
-                        seconds = value * 60
+                        interval = value * 60
                     else:  # 's'
-                        seconds = value
-                    
-                    config["groups"][chat_id_str]["repeated_messages"]["interval"] = seconds
-                    save_config(config)
-                    
-                    if seconds < 60:
-                        interval_text = f"{seconds} saniye"
-                    elif seconds < 3600:
-                        interval_text = f"{seconds // 60} dakika"
-                    else:
-                        interval_text = f"{seconds // 3600} saat"
-                    
-                    await conv.send_message(f"Tekrarlama aralığı {interval_text} olarak ayarlandı.")
+                        interval = value
                 else:
-                    await conv.send_message("Geçersiz format. Değişiklik yapılmadı.")
-        
-        elif action == "add_message":
-            async with client.conversation(event.sender_id, timeout=300) as conv:
-                await event.delete()
-                await conv.send_message("Eklemek istediğiniz mesajı girin:")
-                message_response = await conv.get_response()
-                message_text = message_response.text
-                
-                if message_text:
-                    if "messages" not in config["groups"][chat_id_str]["repeated_messages"]:
-                        config["groups"][chat_id_str]["repeated_messages"]["messages"] = []
-                    
-                    config["groups"][chat_id_str]["repeated_messages"]["messages"].append(message_text)
-                    save_config(config)
-                    await conv.send_message("Mesaj eklendi.")
-                else:
-                    await conv.send_message("Geçersiz mesaj. Değişiklik yapılmadı.")
-        
-        elif action == "list_messages":
-            messages = config["groups"][chat_id_str]["repeated_messages"]["messages"]
-            if messages:
-                message_list = ""
-                for i, message in enumerate(messages, 1):
-                    # Mesajı kısaltıp göster (çok uzunsa)
-                    if len(message) > 50:
-                        message_preview = message[:47] + "..."
-                    else:
-                        message_preview = message
-                    message_list += f"{i}. {message_preview}\n"
-                
-                await event.edit(f"📋 **Tekrarlanan Mesajlar**\n\n{message_list}")
-            else:
-                await event.edit("Henüz tekrarlanan mesaj eklenmemiş.")
-        
-        elif action == "clear_messages":
-            config["groups"][chat_id_str]["repeated_messages"]["messages"] = []
-            save_config(config)
-            await event.edit("Tüm tekrarlanan mesajlar temizlendi.")
-        
-        elif action == "toggle_image":
-            current_state = config["groups"][chat_id_str]["repeated_messages"].get("with_image", False)
-            new_state = not current_state
-            config["groups"][chat_id_str]["repeated_messages"]["with_image"] = new_state
+                    await conv.send_message("Geçersiz format. Varsayılan süre kullanılacak.")
+                    interval = default_interval
+            
+            # Yeni mesajı ekle
+            new_message = {
+                "text": message_text,
+                "interval": interval,
+                "last_sent": 0
+            }
+            
+            if "messages" not in repeated_settings:
+                repeated_settings["messages"] = []
+            
+            repeated_settings["messages"].append(new_message)
             save_config(config)
             
-            status = "açıldı ✅" if new_state else "kapatıldı ❌"
-            await event.edit(f"Tekrarlanan mesajlarda resim desteği {status}")
-        
-        elif action == "add_button":
-            async with client.conversation(event.sender_id, timeout=300) as conv:
-                await event.delete()
-                await conv.send_message("Buton metni girin:")
-                text_response = await conv.get_response()
-                button_text = text_response.text
-                
-                await conv.send_message("Buton URL'sini girin:")
-                url_response = await conv.get_response()
-                button_url = url_response.text
-                
-                if button_text and button_url:
-                    if "buttons" not in config["groups"][chat_id_str]["repeated_messages"]:
-                        config["groups"][chat_id_str]["repeated_messages"]["buttons"] = []
-                    
-                    config["groups"][chat_id_str]["repeated_messages"]["buttons"].append({
-                        "text": button_text,
-                        "url": button_url
-                    })
-                    save_config(config)
-                    await conv.send_message(f"Buton eklendi: {button_text} -> {button_url}")
-                else:
-                    await conv.send_message("Geçersiz buton bilgisi. Buton eklenemedi.")
-        
-        elif action == "clear_buttons":
-            config["groups"][chat_id_str]["repeated_messages"]["buttons"] = []
-            save_config(config)
-            await event.edit("Tüm butonlar temizlendi.")
+            # Mesajın bilgilerini göster
+            interval_text = format_interval(interval)
+            
+            await conv.send_message(
+                f"Mesaj eklendi!\n\n"
+                f"**Mesaj:** {message_text[:100]}{'...' if len(message_text) > 100 else ''}\n"
+                f"**Süre:** {interval_text}"
+            )
+            
+            # Ana menüye dön
+            msg = await conv.send_message("Ana menüye dönülüyor...")
+            await repeated_messages_menu(await client.get_messages(conv.chat_id, ids=msg.id))
+            
     except Exception as e:
-        logger.error(f"Tekrarlanan mesaj buton işleyicisinde hata: {str(e)}")
+        logger.error(f"Mesaj ekleme işleyicisinde hata: {str(e)}")
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
 
-# Tekrarlanan mesajları gönderme işlevi
+# Mesajları listeleme ve düzenleme
+@client.on(events.CallbackQuery(pattern=r'repeated_list_messages_(-?\d+)'))
+async def repeated_list_messages_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
+        messages = repeated_settings.get("messages", [])
+        
+        if not messages:
+            await event.answer("Henüz tekrarlanan mesaj eklenmemiş.", alert=True)
+            return
+        
+        await event.answer()
+        
+        # Mesaj listesi ve düzenleme butonları
+        message_buttons = []
+        
+        for i, message in enumerate(messages):
+            # Mesajı kısaltıp göster
+            message_text = message.get("text", "")
+            if len(message_text) > 30:
+                message_preview = message_text[:27] + "..."
+            else:
+                message_preview = message_text
+                
+            interval_text = format_interval(message.get("interval", 3600))
+            
+            # Her mesaj için düzenleme butonu
+            edit_button = Button.inline(f"{i+1}. {message_preview} ({interval_text})", data=f"repeated_edit_message_{chat_id}_{i}")
+            message_buttons.append([edit_button])
+        
+        # Geri dönüş butonu
+        back_button = Button.inline("⬅️ Ana Menüye Dön", data=f"repeated_back_to_main_{chat_id}")
+        message_buttons.append([back_button])
+        
+        await event.edit("📋 **Tekrarlanan Mesajlar**\n\nDüzenlemek istediğiniz mesajı seçin:", buttons=message_buttons)
+        
+    except Exception as e:
+        logger.error(f"Mesaj listeleme işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Mesaj düzenleme
+@client.on(events.CallbackQuery(pattern=r'repeated_edit_message_(-?\d+)_(\d+)'))
+async def repeated_edit_message_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        message_index = int(event.pattern_match.group(2).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
+        messages = repeated_settings.get("messages", [])
+        
+        if message_index >= len(messages):
+            await event.answer("Geçersiz mesaj indeksi.", alert=True)
+            return
+        
+        message = messages[message_index]
+        message_text = message.get("text", "")
+        interval = message.get("interval", 3600)
+        
+        # Düzenleme butonları
+        edit_text_button = Button.inline("✏️ Metni Düzenle", data=f"repeated_edit_text_{chat_id}_{message_index}")
+        edit_interval_button = Button.inline("⏱️ Süreyi Değiştir", data=f"repeated_edit_interval_{chat_id}_{message_index}")
+        delete_button = Button.inline("🗑️ Mesajı Sil", data=f"repeated_delete_message_{chat_id}_{message_index}")
+        back_button = Button.inline("⬅️ Listeye Dön", data=f"repeated_list_messages_{chat_id}")
+        
+        buttons = [
+            [edit_text_button, edit_interval_button],
+            [delete_button],
+            [back_button]
+        ]
+        
+        # Mesaj bilgilerini hazırla
+        interval_text = format_interval(interval)
+        
+        message_info = f"📝 **Mesaj Detayları**\n\n" \
+                      f"**Mesaj:** {message_text}\n\n" \
+                      f"**Süre:** {interval_text}"
+        
+        await event.edit(message_info, buttons=buttons)
+        
+    except Exception as e:
+        logger.error(f"Mesaj düzenleme işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Mesaj metnini düzenleme
+@client.on(events.CallbackQuery(pattern=r'repeated_edit_text_(-?\d+)_(\d+)'))
+async def repeated_edit_text_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        message_index = int(event.pattern_match.group(2).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
+        messages = repeated_settings.get("messages", [])
+        
+        if message_index >= len(messages):
+            await event.answer("Geçersiz mesaj indeksi.", alert=True)
+            return
+        
+        async with client.conversation(event.sender_id, timeout=300) as conv:
+            await event.answer()
+            await event.delete()
+            
+            current_message = messages[message_index]
+            
+            await conv.send_message(f"Mevcut mesaj:\n\n{current_message.get('text', '')}\n\nYeni mesajı girin:")
+            message_response = await conv.get_response()
+            new_text = message_response.text
+            
+            if new_text:
+                messages[message_index]["text"] = new_text
+                save_config(config)
+                await conv.send_message("Mesaj metni güncellendi.")
+            else:
+                await conv.send_message("Geçersiz mesaj. Değişiklik yapılmadı.")
+            
+            # Mesaj düzenleme menüsüne geri dön
+            msg = await conv.send_message("Düzenleme menüsüne dönülüyor...")
+            fake_event = await client.get_messages(conv.chat_id, ids=msg.id)
+            fake_event.pattern_match = re.match(r'repeated_edit_message_(-?\d+)_(\d+)', f"repeated_edit_message_{chat_id}_{message_index}")
+            await repeated_edit_message_handler(fake_event)
+            
+    except Exception as e:
+        logger.error(f"Mesaj metni düzenleme işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Mesaj süresini düzenleme
+@client.on(events.CallbackQuery(pattern=r'repeated_edit_interval_(-?\d+)_(\d+)'))
+async def repeated_edit_interval_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        message_index = int(event.pattern_match.group(2).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
+        messages = repeated_settings.get("messages", [])
+        
+        if message_index >= len(messages):
+            await event.answer("Geçersiz mesaj indeksi.", alert=True)
+            return
+        
+        async with client.conversation(event.sender_id, timeout=300) as conv:
+            await event.answer()
+            await event.delete()
+            
+            current_message = messages[message_index]
+            current_interval = current_message.get("interval", 3600)
+            current_interval_text = format_interval(current_interval)
+            
+            await conv.send_message(
+                f"Mevcut süre: {current_interval_text}\n\n"
+                "Yeni tekrarlama süresini belirtin:\n"
+                "- Saat için: 1h, 2h, vb.\n"
+                "- Dakika için: 1m, 30m, vb.\n"
+                "- Saniye için: 30s, 45s, vb."
+            )
+            interval_response = await conv.get_response()
+            interval_text = interval_response.text.lower()
+            
+            match = re.match(r'(\d+)([hms])', interval_text)
+            if match:
+                value = int(match.group(1))
+                unit = match.group(2)
+                
+                if unit == 'h':
+                    seconds = value * 3600
+                elif unit == 'm':
+                    seconds = value * 60
+                else:  # 's'
+                    seconds = value
+                
+                messages[message_index]["interval"] = seconds
+                save_config(config)
+                
+                await conv.send_message(f"Mesaj süresi {format_interval(seconds)} olarak güncellendi.")
+            else:
+                await conv.send_message("Geçersiz format. Değişiklik yapılmadı.")
+            
+            # Mesaj düzenleme menüsüne geri dön
+            msg = await conv.send_message("Düzenleme menüsüne dönülüyor...")
+            fake_event = await client.get_messages(conv.chat_id, ids=msg.id)
+            fake_event.pattern_match = re.match(r'repeated_edit_message_(-?\d+)_(\d+)', f"repeated_edit_message_{chat_id}_{message_index}")
+            await repeated_edit_message_handler(fake_event)
+            
+    except Exception as e:
+        logger.error(f"Mesaj süresi düzenleme işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Mesaj silme
+@client.on(events.CallbackQuery(pattern=r'repeated_delete_message_(-?\d+)_(\d+)'))
+async def repeated_delete_message_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        message_index = int(event.pattern_match.group(2).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
+        messages = repeated_settings.get("messages", [])
+        
+        if message_index >= len(messages):
+            await event.answer("Geçersiz mesaj indeksi.", alert=True)
+            return
+        
+        # Onay iste
+        confirm_button = Button.inline("✅ Evet, Sil", data=f"repeated_confirm_delete_message_{chat_id}_{message_index}")
+        cancel_button = Button.inline("❌ İptal", data=f"repeated_edit_message_{chat_id}_{message_index}")
+        
+        buttons = [
+            [confirm_button],
+            [cancel_button]
+        ]
+        
+        message_text = messages[message_index].get("text", "")
+        if len(message_text) > 50:
+            message_preview = message_text[:47] + "..."
+        else:
+            message_preview = message_text
+            
+        await event.edit(
+            f"⚠️ **Mesajı Silmek İstiyor musunuz?**\n\n"
+            f"**Mesaj:** {message_preview}\n\n"
+            f"Bu işlem geri alınamaz!",
+            buttons=buttons
+        )
+        
+    except Exception as e:
+        logger.error(f"Mesaj silme işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Mesaj silme onayı
+@client.on(events.CallbackQuery(pattern=r'repeated_confirm_delete_message_(-?\d+)_(\d+)'))
+async def repeated_confirm_delete_message_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        message_index = int(event.pattern_match.group(2).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
+        messages = repeated_settings.get("messages", [])
+        
+        if message_index >= len(messages):
+            await event.answer("Geçersiz mesaj indeksi.", alert=True)
+            return
+        
+        # Mesajı sil
+        deleted_message = messages.pop(message_index)
+        save_config(config)
+        
+        deleted_text = deleted_message.get("text", "")
+        if len(deleted_text) > 30:
+            deleted_preview = deleted_text[:27] + "..."
+        else:
+            deleted_preview = deleted_text
+        
+        await event.answer(f"Mesaj silindi: {deleted_preview}")
+        
+        # Mesaj listesine geri dön
+        await repeated_list_messages_handler(event)
+        
+    except Exception as e:
+        logger.error(f"Mesaj silme onayı işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Tüm mesajları temizle
+@client.on(events.CallbackQuery(pattern=r'repeated_clear_messages_(-?\d+)'))
+async def repeated_clear_messages_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
+        messages = repeated_settings.get("messages", [])
+        
+        if not messages:
+            await event.answer("Silinecek mesaj bulunamadı.", alert=True)
+            return
+            
+        # Onay iste
+        confirm_button = Button.inline("✅ Evet, Tümünü Sil", data=f"repeated_confirm_clear_messages_{chat_id}")
+        cancel_button = Button.inline("❌ İptal", data=f"repeated_back_to_main_{chat_id}")
+        
+        buttons = [
+            [confirm_button],
+            [cancel_button]
+        ]
+        
+        await event.edit(
+            f"⚠️ **UYARI**\n\n"
+            f"Toplam {len(messages)} adet tekrarlanan mesajı silmek istediğinize emin misiniz?\n"
+            f"Bu işlem geri alınamaz!",
+            buttons=buttons
+        )
+        
+    except Exception as e:
+        logger.error(f"Mesajları temizleme işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Tüm mesajları temizleme onayı
+@client.on(events.CallbackQuery(pattern=r'repeated_confirm_clear_messages_(-?\d+)'))
+async def repeated_confirm_clear_messages_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        
+        # Tüm mesajları temizle
+        config["groups"][chat_id_str]["repeated_messages"]["messages"] = []
+        save_config(config)
+        
+        await event.answer("Tüm tekrarlanan mesajlar silindi.")
+        
+        # Ana menüye dön
+        await repeated_messages_menu(event)
+        
+    except Exception as e:
+        logger.error(f"Mesajları temizleme onayı işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Buton ekleme için düzeltilmiş kod
+@client.on(events.CallbackQuery(pattern=r'repeated_add_button_(-?\d+)'))
+async def repeated_add_button_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
+        
+        async with client.conversation(event.sender_id, timeout=300) as conv:
+            await event.answer()
+            await event.delete()
+            
+            await conv.send_message("Buton metni girin:")
+            text_response = await conv.get_response()
+            button_text = text_response.text
+            
+            if not button_text:
+                await conv.send_message("Geçersiz buton metni. İşlem iptal edildi.")
+                return
+            
+            await conv.send_message("Buton URL'sini girin (örn. https://example.com):")
+            url_response = await conv.get_response()
+            button_url = url_response.text
+            
+            # URL'nin geçerli olduğundan emin ol
+            if not button_url.startswith(('http://', 'https://', 't.me/')):
+                await conv.send_message("Geçersiz URL. URL 'http://', 'https://' veya 't.me/' ile başlamalıdır. İşlem iptal edildi.")
+                return
+            
+            # Butonları hazırla
+            if "buttons" not in repeated_settings:
+                repeated_settings["buttons"] = []
+            
+            repeated_settings["buttons"].append({
+                "text": button_text,
+                "url": button_url
+            })
+            save_config(config)
+            
+            await conv.send_message(f"Buton eklendi:\n**Metin:** {button_text}\n**URL:** {button_url}")
+            
+            # Ana menüye dön
+            msg = await conv.send_message("Ana menüye dönülüyor...")
+            await repeated_messages_menu(await client.get_messages(conv.chat_id, ids=msg.id))
+    
+    except Exception as e:
+        logger.error(f"Buton ekleme işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Butonları temizleme işlevi
+@client.on(events.CallbackQuery(pattern=r'repeated_clear_buttons_(-?\d+)'))
+async def repeated_clear_buttons_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        buttons = config["groups"][chat_id_str]["repeated_messages"].get("buttons", [])
+        
+        if not buttons:
+            await event.answer("Silinecek buton bulunamadı.", alert=True)
+            return
+        
+        # Onay iste
+        confirm_button = Button.inline("✅ Evet, Tüm Butonları Sil", data=f"repeated_confirm_clear_buttons_{chat_id}")
+        cancel_button = Button.inline("❌ İptal", data=f"repeated_back_to_main_{chat_id}")
+        
+        buttons = [
+            [confirm_button],
+            [cancel_button]
+        ]
+        
+        await event.edit(
+            f"⚠️ **UYARI**\n\n"
+            f"Tüm butonları silmek istediğinize emin misiniz?\n"
+            f"Bu işlem geri alınamaz!",
+            buttons=buttons
+        )
+        
+    except Exception as e:
+        logger.error(f"Butonları temizleme işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Butonları temizleme onayı
+@client.on(events.CallbackQuery(pattern=r'repeated_confirm_clear_buttons_(-?\d+)'))
+async def repeated_confirm_clear_buttons_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        
+        # Tüm butonları temizle
+        config["groups"][chat_id_str]["repeated_messages"]["buttons"] = []
+        save_config(config)
+        
+        await event.answer("Tüm butonlar silindi.")
+        
+        # Ana menüye dön
+        await repeated_messages_menu(event)
+        
+    except Exception as e:
+        logger.error(f"Butonları temizleme onayı işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Tekrarlanan mesajları gönderme işlevini güncelle
 async def send_repeated_messages():
     while True:
         try:
@@ -2410,74 +3137,74 @@ async def send_repeated_messages():
                 if "repeated_messages" in group_data:
                     repeated_settings = group_data["repeated_messages"]
                     
-                    if repeated_settings["enabled"] and repeated_settings["messages"]:
-                        chat_id = int(chat_id_str)
+                    # Sistem devre dışıysa kontrol etme
+                    if not repeated_settings.get("enabled", False):
+                        continue
+                    
+                    chat_id = int(chat_id_str)
+                    messages = repeated_settings.get("messages", [])
+                    buttons = repeated_settings.get("buttons", [])
+                    
+                    # Her mesajı ayrı ayrı kontrol et
+                    for i, message in enumerate(messages):
+                        # ÖNEMLİ: Eski format mesajları kontrol et ve dönüştür
+                        if isinstance(message, str):
+                            # Eski formatı yeni formata dönüştür
+                            old_message_text = message
+                            messages[i] = {
+                                "text": old_message_text,
+                                "interval": repeated_settings.get("interval", 3600),
+                                "last_sent": 0
+                            }
+                            save_config(config)
+                            message = messages[i]  # Güncellenmiş mesajı al
                         
-                        # Son gönderim zamanını kontrol et
-                        last_sent = repeated_settings.get("last_sent", 0)
-                        interval = repeated_settings["interval"]
+                        # Artık her mesaj dict formatında olmalı
+                        message_text = message["text"]
+                        interval = message.get("interval", 3600)
+                        last_sent = message.get("last_sent", 0)
                         
+                        # Gönderme zamanı geldiyse
                         if current_time - last_sent >= interval:
-                            # Rastgele bir mesaj seç
-                            import random
-                            message = random.choice(repeated_settings["messages"])
-                            
-                            # Butonları hazırla
-                            buttons = None
-                            if repeated_settings.get("buttons"):
-                                buttons = []
-                                row = []
-                                for i, btn in enumerate(repeated_settings["buttons"]):
-                                    row.append(Button.url(btn["text"], btn["url"]))
-                                    
-                                    # Her 2 butondan sonra yeni satır
-                                    if (i + 1) % 2 == 0 or i == len(repeated_settings["buttons"]) - 1:
-                                        buttons.append(row)
-                                        row = []
-                            
                             try:
-                                # Resimli mesaj gönderimi
-                                if repeated_settings.get("with_image", False):
-                                    # Örnek resim dosyası - gerçek uygulamada farklı resimler kullanılabilir
-                                    image_path = "./repeat_image.jpg"
+                                # Butonları hazırla
+                                message_buttons = None
+                                if buttons:
+                                    btn_array = []
+                                    row = []
+                                    for j, btn in enumerate(buttons):
+                                        row.append(Button.url(btn["text"], btn["url"]))
+                                        
+                                        # Her 2 butondan sonra yeni satır
+                                        if (j + 1) % 2 == 0 or j == len(buttons) - 1:
+                                            btn_array.append(row)
+                                            row = []
                                     
-                                    # Resim dosyası varsa gönder, yoksa normal mesaj
-                                    if os.path.exists(image_path):
-                                        await client.send_file(
-                                            chat_id,
-                                            image_path,
-                                            caption=message,
-                                            buttons=buttons
-                                        )
-                                    else:
-                                        await client.send_message(
-                                            chat_id,
-                                            message,
-                                            buttons=buttons
-                                        )
-                                else:
-                                    # Normal metin mesajı
-                                    await client.send_message(
-                                        chat_id,
-                                        message,
-                                        buttons=buttons
-                                    )
+                                    if btn_array:
+                                        message_buttons = btn_array
+                                
+                                # Normal metin mesajı
+                                await client.send_message(
+                                    chat_id,
+                                    message_text,
+                                    buttons=message_buttons
+                                )
                                 
                                 # Son gönderim zamanını güncelle
-                                config["groups"][chat_id_str]["repeated_messages"]["last_sent"] = current_time
+                                messages[i]["last_sent"] = current_time
                                 save_config(config)
                                 
                                 # Tekrarlanan mesajı logla
                                 log_text = f"🔄 **TEKRARLANAN MESAJ GÖNDERİLDİ**\n\n" \
                                         f"**Grup ID:** `{chat_id}`\n" \
-                                        f"**Mesaj:** {message[:100]}{'...' if len(message) > 100 else ''}\n" \
+                                        f"**Mesaj:** {message_text[:100]}{'...' if len(message_text) > 100 else ''}\n" \
                                         f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                                 
                                 await log_to_thread("repeated_msgs", log_text)
                                 
                             except Exception as e:
                                 logger.error(f"Tekrarlanan mesaj gönderilirken hata oluştu: {e}")
-        
+            
         except Exception as e:
             logger.error(f"Tekrarlanan mesaj döngüsünde hata oluştu: {e}")
         
@@ -2810,9 +3537,10 @@ async def help_command(event):
 
 # Ana fonksiyon
 async def main():
+    load_stats()
     # Tekrarlanan mesajlar için arka plan görevi
     asyncio.create_task(send_repeated_messages())
-    
+    asyncio.create_task(send_daily_report())
     print("Bot çalışıyor!")
     
     # Bot sonsuza kadar çalışsın
